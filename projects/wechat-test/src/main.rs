@@ -4,12 +4,16 @@
 #![doc(html_logo_url = "https://raw.githubusercontent.com/oovm/shape-rs/dev/projects/images/Trapezohedron.svg")]
 #![doc(html_favicon_url = "https://raw.githubusercontent.com/oovm/shape-rs/dev/projects/images/Trapezohedron.svg")]
 
-use wechat_link::login::get_uuid;
+use wechat_link::login::{get_qrcode, get_uuid};
 
 #[tokio::main]
 async fn main() {
     match get_uuid().await {
-        Ok(uuid) => println!("uuid: {}", uuid),
+        Ok(uuid) => {
+            get_qrcode(&uuid).await.unwrap();
+
+
+        },
         Err(err) => eprintln!("Error: {}", err),
     }
 }
