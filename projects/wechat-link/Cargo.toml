@@ -1,6 +1,5 @@
 [package]
-name = "sub_projects"
-publish = false
+name = "wechat-link"
 version = "0.0.0"
 authors = ["Aster <192607617@qq.com>"]
 description = "..."
@@ -14,6 +13,7 @@ edition = "2021"
 exclude = ["package.json", "tests/**"]
 
 [dependencies]
+reqwest = { version = "0.12.5" }
 
 [dev-dependencies]
 
