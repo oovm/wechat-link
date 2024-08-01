@@ -4,7 +4,12 @@
 #![doc(html_logo_url = "https://raw.githubusercontent.com/oovm/shape-rs/dev/projects/images/Trapezohedron.svg")]
 #![doc(html_favicon_url = "https://raw.githubusercontent.com/oovm/shape-rs/dev/projects/images/Trapezohedron.svg")]
 
-mod errors;
-pub mod login;
+use wechat_link::login::get_uuid;
 
-pub use crate::errors::{ExampleErrorKind, Result, ExampleError};
+#[tokio::main]
+async fn main() {
+    match get_uuid().await {
+        Ok(uuid) => println!("uuid: {}", uuid),
+        Err(err) => eprintln!("Error: {}", err),
+    }
+}

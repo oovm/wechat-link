@@ -1,5 +1,6 @@
 [package]
-name = "wechat-link"
+name = "wechat-test"
+publish = false
 version = "0.0.0"
 authors = ["Aster <192607617@qq.com>"]
 description = "..."
@@ -13,8 +14,11 @@ edition = "2021"
 exclude = ["package.json", "tests/**"]
 
 [dependencies]
-reqwest = { version = "0.12.5" }
-tokio = "1.39.2"
+tokio = { version = "1.39.2", features = ["full"] }
+
+[dependencies.wechat-link]
+version = "*"
+path = "../wechat-link"
 
 [dev-dependencies]
 
