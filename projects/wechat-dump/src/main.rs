@@ -1,8 +1,15 @@
+#![feature(strict_provenance)]
+
+use proc_mem::{Module, ProcMemError, Process};
 use std::{
     collections::{BTreeSet, HashMap},
     ffi::{CStr, CString},
     ptr,
 };
+use std::borrow::Cow;
+use std::fmt::Formatter;
+use serde::{Deserialize, Deserializer};
+use serde::de::{SeqAccess, Visitor};
 use windows::{
     core::*,
     System::Diagnostics::ProcessDiagnosticInfo,
@@ -11,8 +18,12 @@ use windows::{
         Foundation::*,
         Storage::FileSystem::VS_FIXEDFILEINFO,
         System::{
-            Diagnostics::Debug::ReadProcessMemory,
-            ProcessStatus::EnumProcessModules,
+            Diagnostics::{
+                Debug::ReadProcessMemory,
+                ToolHelp::{CreateToolhelp32Snapshot, Process32First, PROCESSENTRY32},
+            },
+            Memory::{VirtualQueryEx, MEMORY_BASIC_INFORMATION, PAGE_READWRITE, VIRTUAL_ALLOCATION_TYPE},
+            ProcessStatus::{EnumProcessModules, EnumProcessModulesEx, LIST_MODULES_ALL},
             Threading::{
                 GetProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_ALL_ACCESS, PROCESS_BASIC_INFORMATION,
                 PROCESS_NAME_FORMAT,
@@ -98,16 +109,93 @@ fn read_info(version_list: &HashMap<String, Vec<usize>>) -> Result<HashMap<Strin
     Ok(Default::default())
 }
 
-fn main() -> Result<()> {
-    for progress in find_wechat_progresses()? {
-        let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, progress.ProcessId()?)? };
-        let out = find_base_address(handle)?;
-        println!("out: 0x{out:X}");
-        let version = get_process_version(handle)?;
-        println!("version: {version:#?}");
-        let data = read_memory_address(handle, out + 100, 16)?;
-        println!("data: {data:?}")
+pub struct WeChatProcess {
+    process: Process,
+    module: Module,
+}
+
+pub struct UserInfoOffset {
+    // 昵称、账号、手机号、邮箱(过时)、key
+    nick_name: usize,
+    // 账号
+    user_name: usize,
+    // 手机号
+    telephone: usize,
+    // 邮箱
+    email: usize,
+    // 密钥
+    key: usize,
+}
+
+impl <'de> Deserialize for UserInfoOffset {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>
+    {
+        todo!()
     }
+}
+impl <'i, 'de> Visitor for UserInfoOffsetVisitor {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+        todo!()
+    }
+
+    fn visit_seq<A>(self, seq: A) -> std::result::Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        todo!()
+    }
+}
+
+struct UserInfoOffsetVisitor<'i> {
+    proxy: &'i mut UserInfoOffset
+}
+
+
+pub struct UserInfo<'i> {
+    // 昵称、账号、手机号、邮箱(过时)、key
+    nick_name: Cow<'i, str>,
+    // 账号
+    user_name: Cow<'i, str>,
+    // 手机号
+    telephone: Cow<'i, str>,
+    // 邮箱
+    email: Cow<'i, str>,
+    // 密钥
+    key: Cow<'i, str>,
+}
+
+
+impl WeChatProcess {
+    pub fn find_user_by_offset(&self, offsets: UserInfoOffset) -> UserInfo {
+        UserInfo {
+            nick_name: self.find_info_by_offset(offsets.nick_name),
+            user_name: self.find_info_by_offset(offsets.nick_name),
+            telephone:self.find_info_by_offset(offsets.nick_name),
+            email: self.find_info_by_offset(offsets.nick_name),
+            key: self.find_info_by_offset(offsets.nick_name),
+        }
+    }
+    fn find_info_by_offset(&self, offsets: usize) -> Cow<str> {
+        let mut buffer = [0; 32];
+        if !self.process.read_bytes(self.module.base_address() + offsets, buffer.as_mut_ptr(), buffer.len()) {
+            eprintln!("wrong!")
+        }
+        String::from_utf8_lossy(&buffer)
+    }
+
+}
+
+fn main() -> Result<()> {
+    let mut wechats = Vec::with_capacity(1);
+    let processes = Process::all_with_name("WeChat.exe")?;
+    for wechat in processes {
+        wechats.push(WeChatProcess { process: wechat, module: wechat.module("WeChatWin.dll")? });
+    }
+
     Ok(())
 }
 
@@ -115,17 +203,109 @@ fn get_process_version(handle: HANDLE) -> windows::core::Result<VS_FIXEDFILEINFO
     let mut buffer = Vec::with_capacity(MAX_PATH as usize);
     let mut size = buffer.capacity() as u32;
     unsafe {
-        QueryFullProcessImageNameW(handle, PROCESS_NAME_FORMAT::default(), *buffer.as_mut_ptr(), &mut size)?;
-        buffer.set_len(size as usize);
-    };
-    let mut version_info_value = VS_FIXEDFILEINFO::default();
+        if QueryFullProcessImageNameW(handle, PROCESS_NAME_FORMAT::default(), *buffer.as_mut_ptr(), &mut size).is_ok() {
+            buffer.set_len(size as usize);
+            let mut version_info_value = VS_FIXEDFILEINFO::default();
+            if windows::Win32::Storage::FileSystem::GetFileVersionInfoW(
+                PCWSTR::from_raw(buffer.as_ptr() as *const u16),
+                0,
+                std::mem::size_of::<windows::Win32::Storage::FileSystem::VS_FIXEDFILEINFO>() as u32,
+                &mut version_info_value as *mut _ as *mut core::ffi::c_void,
+            )
+            .is_ok()
+            {
+                return Ok(version_info_value);
+            }
+            else {
+                return Err(windows::core::Error::from_win32());
+            }
+        }
+        else {
+            return Err(windows::core::Error::from_win32());
+        }
+    }
+}
+
+fn find_wechat_module(process_handle: HANDLE) -> Result<HMODULE> {
+    let mut needed = 0;
+    let mut modules: Vec<HMODULE> = Vec::with_capacity(256);
     unsafe {
-        windows::Win32::Storage::FileSystem::GetFileVersionInfoW(
-            PCWSTR::from_raw(buffer.as_ptr() as *const u16),
-            0,
-            std::mem::size_of::<windows::Win32::Storage::FileSystem::VS_FIXEDFILEINFO>() as u32,
-            &mut version_info_value as *mut _ as *mut core::ffi::c_void,
-        )?
-    };
-    return Ok(version_info_value);
+        EnumProcessModulesEx(
+            process_handle,
+            modules.as_mut_ptr(),
+            (modules.capacity() * size_of::<HMODULE>()) as u32,
+            &mut needed,
+            LIST_MODULES_ALL,
+        )?;
+        modules.set_len(needed as usize / size_of::<HMODULE>());
+        for module in modules {
+            let mut name_buffer = [0u16; MAX_PATH as usize];
+            let _ = windows::Win32::System::ProcessStatus::GetModuleBaseNameW(process_handle, module, &mut name_buffer);
+            let dll = String::from_utf16_lossy(&name_buffer);
+            if dll.eq("WeChatWin.dll") {
+                return Ok(module);
+            }
+        }
+    }
+    Err(windows::core::Error::from_win32())
+}
+
+// fn K32GetModuleBaseNameW(hProcess: HANDLE, hModule: HMODULE, lpBaseName: *mut UNICODE_STRING) -> BOOL {
+//     unsafe {
+//         windows::Win32::System::Diagnostics::ToolHelp::K32GetModuleBaseNameW(hProcess, hModule, lpBaseName, MAX_PATH as u32)
+//     }
+// }
+
+fn find_unicode_string(handle: HANDLE, address: usize, target: &str) -> Result<Vec<usize>> {
+    let mut mbi = MEMORY_BASIC_INFORMATION::default();
+    unsafe {
+        let _ = VirtualQueryEx(handle, None, &mut mbi, size_of::<MEMORY_BASIC_INFORMATION>());
+        let mut buffer: Vec<u8> = vec![0; mbi.RegionSize];
+        println!("占用内存: {}", mbi.RegionSize);
+        ReadProcessMemory(handle, address as *const _, buffer.as_mut_ptr() as *mut _, mbi.RegionSize, None)?;
+
+        let mut offset = 0;
+        while offset + target.len() < mbi.RegionSize {
+            let slice = buffer.get_unchecked(offset..=offset + target.len());
+            if slice.contains(&0) {
+            }
+            else {
+                println!("{}", String::from_utf8_lossy(slice));
+            }
+            if slice.eq(target.as_bytes()) {
+                return Ok(vec![offset]);
+            }
+            offset += 1;
+        }
+    }
+    Ok(vec![])
+}
+
+unsafe fn all_memory_of_process(handle: HANDLE) -> Result<Vec<u8>> {
+    let mut mbi: MEMORY_BASIC_INFORMATION = MEMORY_BASIC_INFORMATION::default();
+    let mut all_memory: Vec<u8> = Vec::new();
+    let mut address = 0;
+
+    loop {
+        let query = VirtualQueryEx(
+            handle,
+            Some(address as *const core::ffi::c_void),
+            &mut mbi,
+            std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+        );
+
+        if query == 0 {
+            break; // 查询失败，退出循环
+        }
+        println!("RegionSize: {}", mbi.RegionSize);
+        let mut buffer: Vec<u8> = vec![0; mbi.RegionSize];
+        match ReadProcessMemory(handle, address as *const _, buffer.as_mut_ptr() as *mut _, mbi.RegionSize, None) {
+            Ok(o) => {}
+            Err(e) => println!("ReadProcessMemory failed: {:?}", e),
+        }
+        all_memory.extend(buffer);
+        address += mbi.RegionSize;
+    }
+
+    Ok(all_memory)
 }
