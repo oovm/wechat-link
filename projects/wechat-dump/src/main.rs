@@ -1,15 +1,17 @@
 #![feature(strict_provenance)]
 
 use proc_mem::{Module, ProcMemError, Process};
+use serde::{
+    de::{SeqAccess, Visitor},
+    Deserialize, Deserializer,
+};
 use std::{
+    borrow::Cow,
     collections::{BTreeSet, HashMap},
     ffi::{CStr, CString},
+    fmt::Formatter,
     ptr,
 };
-use std::borrow::Cow;
-use std::fmt::Formatter;
-use serde::{Deserialize, Deserializer};
-use serde::de::{SeqAccess, Visitor};
 use windows::{
     core::*,
     System::Diagnostics::ProcessDiagnosticInfo,
@@ -31,6 +33,10 @@ use windows::{
         },
     },
 };
+
+mod secrets;
+
+pub use crate::secrets::{UserInfo, UserInfoOffset};
 
 pub fn find_wechat_progresses() -> Result<Vec<ProcessDiagnosticInfo>> {
     let mut wechat_processes = Vec::with_capacity(1);
@@ -114,80 +120,7 @@ pub struct WeChatProcess {
     module: Module,
 }
 
-pub struct UserInfoOffset {
-    // 昵称、账号、手机号、邮箱(过时)、key
-    nick_name: usize,
-    // 账号
-    user_name: usize,
-    // 手机号
-    telephone: usize,
-    // 邮箱
-    email: usize,
-    // 密钥
-    key: usize,
-}
 
-impl <'de> Deserialize for UserInfoOffset {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>
-    {
-        todo!()
-    }
-}
-impl <'i, 'de> Visitor for UserInfoOffsetVisitor {
-    type Value = ();
-
-    fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-        todo!()
-    }
-
-    fn visit_seq<A>(self, seq: A) -> std::result::Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        todo!()
-    }
-}
-
-struct UserInfoOffsetVisitor<'i> {
-    proxy: &'i mut UserInfoOffset
-}
-
-
-pub struct UserInfo<'i> {
-    // 昵称、账号、手机号、邮箱(过时)、key
-    nick_name: Cow<'i, str>,
-    // 账号
-    user_name: Cow<'i, str>,
-    // 手机号
-    telephone: Cow<'i, str>,
-    // 邮箱
-    email: Cow<'i, str>,
-    // 密钥
-    key: Cow<'i, str>,
-}
-
-
-impl WeChatProcess {
-    pub fn find_user_by_offset(&self, offsets: UserInfoOffset) -> UserInfo {
-        UserInfo {
-            nick_name: self.find_info_by_offset(offsets.nick_name),
-            user_name: self.find_info_by_offset(offsets.nick_name),
-            telephone:self.find_info_by_offset(offsets.nick_name),
-            email: self.find_info_by_offset(offsets.nick_name),
-            key: self.find_info_by_offset(offsets.nick_name),
-        }
-    }
-    fn find_info_by_offset(&self, offsets: usize) -> Cow<str> {
-        let mut buffer = [0; 32];
-        if !self.process.read_bytes(self.module.base_address() + offsets, buffer.as_mut_ptr(), buffer.len()) {
-            eprintln!("wrong!")
-        }
-        String::from_utf8_lossy(&buffer)
-    }
-
-}
 
 fn main() -> Result<()> {
     let mut wechats = Vec::with_capacity(1);
@@ -242,9 +175,6 @@ fn find_wechat_module(process_handle: HANDLE) -> Result<HMODULE> {
             let mut name_buffer = [0u16; MAX_PATH as usize];
             let _ = windows::Win32::System::ProcessStatus::GetModuleBaseNameW(process_handle, module, &mut name_buffer);
             let dll = String::from_utf16_lossy(&name_buffer);
-            if dll.eq("WeChatWin.dll") {
-                return Ok(module);
-            }
         }
     }
     Err(windows::core::Error::from_win32())
