@@ -3,8 +3,24 @@ use std::fs::File;
 use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::{Client, Error};
+use reqwest::header::{REFERER, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
+
+mod desktop;
+
+const USER_AGENT_DEFAULT: &'static str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36";
+
+const UOS_PATCH_CLIENT_VERSION: &'static str = "2.0.0";
+const UOS_PATCH_EXTSPAM: &'static str = include_str!("uos.txt");
+
+fn wx_time() -> (String, String) {
+    let local_time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i32;
+    return ((-local_time / 1579).to_string(), local_time.to_string());
+}
 
 pub async fn get_uuid() -> Result<String, reqwest::Error> {
     let client = Client::new();
@@ -12,11 +28,12 @@ pub async fn get_uuid() -> Result<String, reqwest::Error> {
     params.insert("appid", "wx782c26e4c19acffb");
     params.insert("fun", "new");
     params.insert("lang", "zh_CN");
-    let time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs().to_string();
-    params.insert("_", time.as_ref());
-    params.insert("redirect_uri", "https://wx.qq.com/");
-
+    let (rt, _t) = wx_time();
+    params.insert("r", &rt);
+    params.insert("_", &_t);
+    params.insert("redirect_uri", "https://wx.qq.com/cgi-bin/mmwebwx-bin/webwxnewloginpage?mod=desktop");
     let response = client.get("https://login.wx.qq.com/jslogin")
+        .header(USER_AGENT, USER_AGENT_DEFAULT)
         .query(&params)
         .send()
         .await?;
@@ -33,6 +50,7 @@ pub async fn get_qrcode(uuid: &str) -> Result<(), reqwest::Error> {
     let params = vec![("t", "webwx")];
 
     let response = client.get(&url)
+        .header(USER_AGENT, USER_AGENT_DEFAULT)
         .query(&params)
         .send()
         .await?;
@@ -50,11 +68,13 @@ async fn call_login_status(uuid: &str) -> Result<LoginStatus, reqwest::Error> {
     let mut params = HashMap::new();
     params.insert("tip", "1");
     params.insert("uuid", uuid);
-    let time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs().to_string();
-    params.insert("_", &time);
+    let (rt, _t) = wx_time();
+    params.insert("r", &rt);
+    params.insert("_", &_t);
     params.insert("loginicon", "true");
 
     let response = client.get("https://login.wx.qq.com/cgi-bin/mmwebwx-bin/login")
+        .header(USER_AGENT, USER_AGENT_DEFAULT)
         .query(&params)
         .send()
         .await?;
@@ -130,23 +150,15 @@ pub struct LoginInfo {
 }
 
 pub async fn get_login_info(redirect_uri: &str) -> Result<String, reqwest::Error> {
-    let client = Client::new();
-    let mut params = HashMap::new();
-    params.insert("fun", "new");
-    params.insert("version", "v2");
-    let time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs().to_string();
-    params.insert("_", &time);
-
-    let response = client.get(redirect_uri)
-        .query(&params)
+    let response = Client::new()
+        .get(redirect_uri)
+        .header(USER_AGENT, USER_AGENT_DEFAULT)
+        .header("client-version", UOS_PATCH_CLIENT_VERSION)
+        .header("extspam", UOS_PATCH_EXTSPAM)
+        .header(REFERER, "https://wx.qq.com/?&lang=zh_CN&target=t")
+        // .query(&params)
         .send()
         .await?;
-
     let login_info = response.text().await?;
-
-    if login_info.contains("暂不支持") {
-        panic!("禁用")
-    }
-
     Ok(login_info)
 }

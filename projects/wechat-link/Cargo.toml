@@ -18,6 +18,8 @@ qr2term = "0.3.1"
 tokio = "1.39.2"
 serde = { version = "1.0.204", features = ["derive"] }
 serde-xml-rs2 = "0.3.0"
+regex = "1.10.5"
+chrono = "0.4.38"
 
 [dev-dependencies]
 
