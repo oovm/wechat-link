@@ -1,5 +1,5 @@
 [package]
-name = "wechat-dump"
+name = "wechat-windows-hooks"
 publish = false
 version = "0.0.0"
 authors = ["Aster <192607617@qq.com>"]
@@ -16,7 +16,7 @@ exclude = ["package.json", "tests/**"]
 [dependencies]
 tokio = { version = "1.39.2", features = ["full"] }
 hex = "0.4.3"
-winapi = "0.3.9"
+winapi = { version = "0.3.9", features = ["tlhelp32", "winnt", "memoryapi", "minwindef", "processthreadsapi"] }
 
 [dependencies.wechat-link]
 version = "*"
