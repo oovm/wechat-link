@@ -34,9 +34,13 @@ use windows::{
     },
 };
 
-mod secrets;
+mod wx_process;
+mod wx_secret;
 
-pub use crate::secrets::{UserInfo, UserInfoOffset};
+pub use crate::{
+    wx_process::WeChatProcess,
+    wx_secret::{UserInfo, UserInfoOffset},
+};
 
 pub fn find_wechat_progresses() -> Result<Vec<ProcessDiagnosticInfo>> {
     let mut wechat_processes = Vec::with_capacity(1);
@@ -113,23 +117,6 @@ fn read_info(version_list: &HashMap<String, Vec<usize>>) -> Result<HashMap<Strin
     }
 
     Ok(Default::default())
-}
-
-pub struct WeChatProcess {
-    process: Process,
-    module: Module,
-}
-
-
-
-fn main() -> Result<()> {
-    let mut wechats = Vec::with_capacity(1);
-    let processes = Process::all_with_name("WeChat.exe")?;
-    for wechat in processes {
-        wechats.push(WeChatProcess { process: wechat, module: wechat.module("WeChatWin.dll")? });
-    }
-
-    Ok(())
 }
 
 fn get_process_version(handle: HANDLE) -> windows::core::Result<VS_FIXEDFILEINFO> {

@@ -1,23 +1,31 @@
 use crate::WeChatProcess;
+use indexmap::IndexMap;
 use serde::{
     de::{MapAccess, SeqAccess, Visitor},
-    Deserialize, Deserializer,
+    Deserialize, Deserializer, Serialize,
 };
-use std::{borrow::Cow, fmt::Formatter};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, HashMap},
+    fmt::Formatter,
+    fs::File,
+    io::Write,
+};
 
-pub struct UserInfo<'i> {
+pub struct UserInfo {
     // 昵称、账号、手机号、邮箱(过时)、key
-    pub nick_name: Cow<'i, str>,
+    pub nick_name: String,
     // 账号
-    pub user_name: Cow<'i, str>,
+    pub user_name: String,
     // 手机号
-    pub telephone: Cow<'i, str>,
+    pub telephone: String,
     // 邮箱
-    pub email: Cow<'i, str>,
+    pub email: String,
     // 密钥
-    pub key: Cow<'i, str>,
+    pub key: String,
 }
 
+#[derive(Default, Serialize)]
 pub struct UserInfoOffset {
     // 昵称、账号、手机号、邮箱(过时)、key
     pub nick_name: usize,
@@ -41,24 +49,37 @@ impl WeChatProcess {
             key: self.find_info_by_offset(offsets.nick_name),
         }
     }
-    fn find_info_by_offset(&self, offsets: usize) -> Cow<str> {
+    fn find_info_by_offset(&self, offsets: usize) -> String {
         let mut buffer = [0; 32];
         if !self.process.read_bytes(self.module.base_address() + offsets, buffer.as_mut_ptr(), buffer.len()) {
             eprintln!("wrong!")
         }
-        String::from_utf8_lossy(&buffer)
+        unsafe { String::from_utf8_unchecked(buffer.to_vec()) }
     }
 }
 
-impl<'de> Deserialize for UserInfoOffset {
+impl UserInfoOffset {
+    pub fn from_config(json: &str) -> IndexMap<String, UserInfoOffset> {
+        serde_json::from_str(json).unwrap()
+    }
+    pub fn from_py_wx_dump(json: &str) -> IndexMap<String, UserInfoOffset> {
+        serde_json::from_str(json).unwrap()
+    }
+}
+
+impl<'de> Deserialize<'de> for UserInfoOffset {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        todo!()
+        let mut new = UserInfoOffset::default();
+        let visitor = UserInfoOffsetVisitor { proxy: &mut new };
+        deserializer.deserialize_any(visitor)?;
+        Ok(new)
     }
 }
-impl<'i, 'de> Visitor for UserInfoOffsetVisitor {
+
+impl<'i, 'de> Visitor<'de> for UserInfoOffsetVisitor<'i> {
     type Value = ();
 
     fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
@@ -74,7 +95,7 @@ impl<'i, 'de> Visitor for UserInfoOffsetVisitor {
             items.push(s)
         }
         match items.as_slice() {
-            // 应昵称、账号、手机号、邮箱(过时)、key
+            // 支持从 https://github.com/xaoyaoo/PyWxDump/blob/master/pywxdump/WX_OFFS.json 导入
             [a, b, c, d, e] => {
                 self.proxy.nick_name = *a;
                 self.proxy.user_name = *b;
