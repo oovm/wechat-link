@@ -9,10 +9,14 @@ use windows::{
     Wdk::System::Threading::{NtQueryInformationProcess, PROCESSINFOCLASS},
     Win32::{
         Foundation::*,
+        Storage::FileSystem::VS_FIXEDFILEINFO,
         System::{
             Diagnostics::Debug::ReadProcessMemory,
             ProcessStatus::EnumProcessModules,
-            Threading::{GetProcessId, OpenProcess, PROCESS_ALL_ACCESS, PROCESS_BASIC_INFORMATION},
+            Threading::{
+                GetProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_ALL_ACCESS, PROCESS_BASIC_INFORMATION,
+                PROCESS_NAME_FORMAT,
+            },
         },
     },
 };
@@ -99,41 +103,29 @@ fn main() -> Result<()> {
         let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, progress.ProcessId()?)? };
         let out = find_base_address(handle)?;
         println!("out: 0x{out:X}");
+        let version = get_process_version(handle)?;
+        println!("version: {version:#?}");
         let data = read_memory_address(handle, out + 100, 16)?;
         println!("data: {data:?}")
     }
     Ok(())
 }
 
-fn get_process_version(process: &windows::System::Diagnostics::ProcessDiagnosticInfo) -> windows::core::Result<String> {
-    let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, process.ProcessId()?) };
+fn get_process_version(handle: HANDLE) -> windows::core::Result<VS_FIXEDFILEINFO> {
     let mut buffer = Vec::with_capacity(MAX_PATH as usize);
     let mut size = buffer.capacity() as u32;
-
-    let status = unsafe {
-        QueryFullProcessImageNameW(
-            handle,
-            PROCESS_NAME_FORMAT::ProcessNameDosPath,
-            buffer.as_mut_ptr() as PWSTR,
-            &mut size,
-        )
-    };
-
-    if status != 0 {
+    unsafe {
+        QueryFullProcessImageNameW(handle, PROCESS_NAME_FORMAT::default(), *buffer.as_mut_ptr(), &mut size)?;
         buffer.set_len(size as usize);
-        let version_info = windows::Win32::System::LibraryLoader::GetFileVersionInfo(
-            PCWSTR::from_raw(buffer.as_ptr()),
+    };
+    let mut version_info_value = VS_FIXEDFILEINFO::default();
+    unsafe {
+        windows::Win32::Storage::FileSystem::GetFileVersionInfoW(
+            PCWSTR::from_raw(buffer.as_ptr() as *const u16),
             0,
-        );
-        if version_info.is_ok() {
-            let version_info_value = version_info?;
-            let version_info_string = version_info_value.FileVersion.to_string();
-            return Ok(version_info_string);
-        }
-    } else {
-        let error = unsafe { GetLastError() };
-        return Err(windows::core::Error::from(NTSTATUS(error as i32)));
-    }
-
-    Err(windows::core::Error::from_win32())
+            std::mem::size_of::<windows::Win32::Storage::FileSystem::VS_FIXEDFILEINFO>() as u32,
+            &mut version_info_value as *mut _ as *mut core::ffi::c_void,
+        )?
+    };
+    return Ok(version_info_value);
 }
