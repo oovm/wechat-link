@@ -34,6 +34,7 @@ use windows::{
     },
 };
 
+mod helpers;
 mod wx_process;
 mod wx_secret;
 
@@ -132,7 +133,7 @@ fn get_process_version(handle: HANDLE) -> windows::core::Result<VS_FIXEDFILEINFO
                 std::mem::size_of::<windows::Win32::Storage::FileSystem::VS_FIXEDFILEINFO>() as u32,
                 &mut version_info_value as *mut _ as *mut core::ffi::c_void,
             )
-            .is_ok()
+                .is_ok()
             {
                 return Ok(version_info_value);
             }

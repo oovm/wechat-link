@@ -4,14 +4,9 @@ use serde::{
     de::{MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer, Serialize,
 };
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, HashMap},
-    fmt::Formatter,
-    fs::File,
-    io::Write,
-};
+use std::{fmt::Formatter, string::FromUtf8Error};
 
+#[derive(Clone, Debug)]
 pub struct UserInfo {
     // 昵称、账号、手机号、邮箱(过时)、key
     pub nick_name: String,
@@ -22,7 +17,7 @@ pub struct UserInfo {
     // 邮箱
     pub email: String,
     // 密钥
-    pub key: String,
+    pub key: [u8; 32],
 }
 
 #[derive(Default, Serialize)]
@@ -43,18 +38,36 @@ impl WeChatProcess {
     pub fn find_user_by_offset(&self, offsets: UserInfoOffset) -> UserInfo {
         UserInfo {
             nick_name: self.find_info_by_offset(offsets.nick_name),
-            user_name: self.find_info_by_offset(offsets.nick_name),
-            telephone: self.find_info_by_offset(offsets.nick_name),
-            email: self.find_info_by_offset(offsets.nick_name),
-            key: self.find_info_by_offset(offsets.nick_name),
+            user_name: self.find_info_by_offset(offsets.user_name),
+            telephone: self.find_info_by_offset(offsets.telephone),
+            email: self.find_info_by_offset(offsets.email),
+            key: self.find_key_by_offset(offsets.key),
         }
     }
     fn find_info_by_offset(&self, offsets: usize) -> String {
+        if offsets == 0 {
+            return String::new();
+        }
+
         let mut buffer = [0; 32];
         if !self.process.read_bytes(self.module.base_address() + offsets, buffer.as_mut_ptr(), buffer.len()) {
             eprintln!("wrong!")
         }
-        unsafe { String::from_utf8_unchecked(buffer.to_vec()) }
+        let view = String::from_utf8_lossy(&buffer);
+        return view.trim_end_matches(|c: char| !c.is_alphanumeric()).to_string();
+        // return view.to_string();
+    }
+    fn find_key_by_offset(&self, offsets: usize) -> [u8; 32] {
+        let mut buffer = [0; 8];
+        if !self.process.read_bytes(self.module.base_address() + offsets, buffer.as_mut_ptr(), buffer.len()) {
+            eprintln!("wrong!")
+        }
+        let ptr = usize::from_le_bytes(buffer);
+        let mut buffer = [0; 32];
+        if !self.process.read_bytes(ptr, buffer.as_mut_ptr(), buffer.len()) {
+            eprintln!("wrong!")
+        }
+        return buffer
     }
 }
 
