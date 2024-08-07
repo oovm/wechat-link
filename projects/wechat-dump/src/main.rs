@@ -1,91 +1,139 @@
-use std::collections::HashSet;
-use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
-use winapi::um::tlhelp32::{
-    CreateToolhelp32Snapshot, Process32First, Process32Next, PROCESSENTRY32, TH32CS_SNAPPROCESS,
+use std::{
+    collections::{BTreeSet, HashMap},
+    ffi::{CStr, CString},
+    ptr,
 };
-use std::process::Command;
-use std::process::Stdio;
-use std::io::Read;
-use winapi::um::winnt::{PROCESS_VM_OPERATION, PROCESS_VM_READ};
-use winapi::um::memoryapi::{ReadProcessMemory};
-use winapi::shared::minwindef::{DWORD, LPVOID, BOOL};
-use winapi::um::processthreadsapi::OpenProcess;
-use winapi::shared::minwindef::DWORD;
-use winapi::um::errhandlingapi::GetLastError;
-use winapi::um::handleapi::CloseHandle;
-use winapi::um::memoryapi::{ReadProcessMemory, VirtualQueryEx};
-use winapi::um::processthreadsapi::{OpenProcess};
-use winapi::um::winnt::{HANDLE, PROCESS_VM_OPERATION, PROCESS_VM_READ};
-use std::mem;
+use windows::{
+    core::*,
+    System::Diagnostics::ProcessDiagnosticInfo,
+    Wdk::System::Threading::{NtQueryInformationProcess, PROCESSINFOCLASS},
+    Win32::{
+        Foundation::*,
+        System::{
+            Diagnostics::Debug::ReadProcessMemory,
+            ProcessStatus::EnumProcessModules,
+            Threading::{GetProcessId, OpenProcess, PROCESS_ALL_ACCESS, PROCESS_BASIC_INFORMATION},
+        },
+    },
+};
 
+pub fn find_wechat_progresses() -> Result<Vec<ProcessDiagnosticInfo>> {
+    let mut wechat_processes = Vec::with_capacity(1);
 
-pub fn find_wechat_processes() -> HashSet<u32> {
-    let mut wechat_processes = HashSet::new();
+    // 获取所有正在运行的进程
+    let process_infos = ProcessDiagnosticInfo::GetForProcesses()?;
 
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-        if snapshot == INVALID_HANDLE_VALUE {
-            return wechat_processes;
+    // 遍历进程
+    for process_info in process_infos {
+        let process_name = process_info.ExecutableFileName()?;
+        if process_name == "WeChat.exe" {
+            wechat_processes.push(process_info);
         }
-
-        let mut pe32: PROCESSENTRY32 = std::mem::zeroed();
-        pe32.dwSize = size_of::<PROCESSENTRY32>() as u32;
-
-        if Process32First(snapshot, &mut pe32) == 0 {
-            CloseHandle(snapshot);
-            return wechat_processes;
-        }
-
-        loop {
-            if pe32.szExeFile.iter().take_while(|&c| *c != 0).map(|&c| c as u8 as char).collect::<String>() == "WeChat.exe" {
-                wechat_processes.insert(pe32.th32ProcessID);
-            }
-
-            if Process32Next(snapshot, &mut pe32) == 0 {
-                break;
-            }
-        }
-
-        CloseHandle(snapshot);
     }
 
-    wechat_processes
+    return Ok(wechat_processes);
 }
 
-fn read_process_memory(process_id: u32, start_offset: usize, end_offset: usize) -> Result<Vec<u8>, String> {
-    let mut buffer = vec![0u8; end_offset - start_offset];
+fn find_base_address(handle: HANDLE) -> Result<usize> {
+    let mut process_info = PROCESS_BASIC_INFORMATION::default();
+    let nt_status = unsafe {
+        NtQueryInformationProcess(
+            handle,
+            PROCESSINFOCLASS::default(),
+            &mut process_info as *mut _ as *mut core::ffi::c_void,
+            size_of::<PROCESS_BASIC_INFORMATION>() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    if nt_status.is_ok() { Ok(process_info.PebBaseAddress as usize) } else { Err(windows::core::Error::from(nt_status)) }
+}
 
-    unsafe {
-        let process_handle = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ, 0, process_id);
-        if process_handle.is_null() {
-            return Err(format!("Failed to open process: {}", GetLastError()));
-        }
+fn read_memory_string(h_process: HANDLE, address: usize, n_size: usize) -> Result<String> {
+    let mut buffer: Vec<u8> = vec![0; n_size];
+    unsafe { ReadProcessMemory(h_process, address as _, buffer.as_mut_ptr() as _, n_size as _, None)? };
+    let text = buffer.iter().take_while(|&&b| b != 0).copied().collect::<Vec<u8>>();
+    Ok(String::from_utf8_lossy(&text).trim().to_string())
+}
 
-        let mut bytes_read: usize = 0;
-        let success = ReadProcessMemory(
-            process_handle,
-            start_offset as *const _,
-            buffer.as_mut_ptr() as *mut _,
-            buffer.len(),
-            &mut bytes_read,
+fn read_memory_address(h_process: HANDLE, offset: usize, length: usize) -> Result<Vec<u8>> {
+    let mut buffer: Vec<u8> = vec![0; length];
+    unsafe { ReadProcessMemory(h_process, offset as _, buffer.as_mut_ptr() as _, length as _, None)? };
+    Ok(buffer)
+}
+
+// fn read_key(h_process: HANDLE, address: usize) -> Result<String> {
+//     let address_len = 8;
+//     if let Ok(key_address) = read_memory_address(h_process, address, address_len) {
+//         let mut key_buffer: Vec<u8> = vec![0; 32];
+//         unsafe { ReadProcessMemory(h_process, key_address as _, key_buffer.as_mut_ptr() as _, 32, None)? }
+//         return Ok(hex::encode(key_buffer));
+//     }
+//     Ok("None".to_string())
+// }
+
+fn read_info(version_list: &HashMap<String, Vec<usize>>) -> Result<HashMap<String, String>> {
+    for process in find_wechat_progresses()? {
+        let mut tmp_rd = HashMap::new();
+        tmp_rd.insert("pid".to_string(), process.ProcessId()?.to_string());
+
+        // let version = process.ExecutableFileName()?;
+        // tmp_rd.insert("version".to_string(), version.clone());
+        //
+        // let bias_list = version_list.get(&version).ok_or(format!("[-] WeChat Current Version {} Is Not Supported", version))?;
+        //
+
+        // let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, process.pid) };
+        //
+        // let account_address = wechat_base_address + bias_list[1];
+        // tmp_rd.insert("account".to_string(), read_memory_string(handle, account_address, 32));
+        //
+        // result.push(tmp_rd);
+        return Ok(tmp_rd);
+    }
+
+    Ok(Default::default())
+}
+
+fn main() -> Result<()> {
+    for progress in find_wechat_progresses()? {
+        let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, progress.ProcessId()?)? };
+        let out = find_base_address(handle)?;
+        println!("out: 0x{out:X}");
+        let data = read_memory_address(handle, out + 100, 16)?;
+        println!("data: {data:?}")
+    }
+    Ok(())
+}
+
+fn get_process_version(process: &windows::System::Diagnostics::ProcessDiagnosticInfo) -> windows::core::Result<String> {
+    let handle = unsafe { OpenProcess(PROCESS_ALL_ACCESS, false, process.ProcessId()?) };
+    let mut buffer = Vec::with_capacity(MAX_PATH as usize);
+    let mut size = buffer.capacity() as u32;
+
+    let status = unsafe {
+        QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_FORMAT::ProcessNameDosPath,
+            buffer.as_mut_ptr() as PWSTR,
+            &mut size,
+        )
+    };
+
+    if status != 0 {
+        buffer.set_len(size as usize);
+        let version_info = windows::Win32::System::LibraryLoader::GetFileVersionInfo(
+            PCWSTR::from_raw(buffer.as_ptr()),
+            0,
         );
-
-        if success == 0 {
-            let error_code = GetLastError();
-            CloseHandle(process_handle);
-            return Err(format!("Failed to read process memory: {}", error_code));
+        if version_info.is_ok() {
+            let version_info_value = version_info?;
+            let version_info_string = version_info_value.FileVersion.to_string();
+            return Ok(version_info_string);
         }
-
-        CloseHandle(process_handle);
-        Ok(buffer)
+    } else {
+        let error = unsafe { GetLastError() };
+        return Err(windows::core::Error::from(NTSTATUS(error as i32)));
     }
-}
 
-fn main() {
-    for process_id in find_wechat_processes() {
-        let start_address = 0x0;
-        let end_address = 0x2000;
-        let memory = read_process_memory(process_id, start_address, end_address);
-        println!("Memory contents: {:?}", memory);
-    }
+    Err(windows::core::Error::from_win32())
 }

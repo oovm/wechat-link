@@ -16,7 +16,14 @@ exclude = ["package.json", "tests/**"]
 [dependencies]
 tokio = { version = "1.39.2", features = ["full"] }
 hex = "0.4.3"
-winapi = { version = "0.3.9", features = ["tlhelp32", "winnt", "memoryapi", "minwindef", "processthreadsapi"] }
+windows = { version = "0.58.0", features = [
+    "System_Diagnostics", "Win32_System_Threading", "Foundation_Collections",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Kernel",
+    "Wdk_System",
+    "Wdk_System_Threading"
+] }
 
 [dependencies.wechat-link]
 version = "*"
