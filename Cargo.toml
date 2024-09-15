@@ -2,7 +2,7 @@
 resolver = "2"
 members = ["projects/*"]
 default-members = [
-    "projects/wechat-link",
+    "projects/mini-program-sdk",
 ]
 exclude = [
     "projects/.DS_Store",
